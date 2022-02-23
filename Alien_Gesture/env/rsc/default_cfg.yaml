@@ -1,0 +1,11 @@
+seed: 1
+record_video: yes
+
+environment:
+  render: True
+  num_envs: 512
+  eval_every_n: 50
+  num_threads: 40
+  simulation_dt: 0.001
+  control_dt: 0.033333333333
+  max_time: 10.0

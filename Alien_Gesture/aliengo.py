@@ -1,0 +1,233 @@
+from ruamel.yaml import YAML, dump, RoundTripDumper
+from raisim_gym.env.RaisimGymVecEnv import RaisimGymVecEnv as Environment
+from raisim_gym.algo.ppo2 import PPO2
+from raisim_gym.archi.policies import MlpPolicy
+from raisim_gym.helper.raisim_gym_helper import ConfigurationSaver, TensorboardLauncher
+from _raisim_gym import RaisimGymEnv
+
+import os
+import math
+import argparse
+import numpy as np
+import time
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import time_checker
+
+class Plot(object):
+    def __init__(self, joint_keys, file_path):
+        self.iteration = []
+        self.pd_total = []
+        self.pd_gain = {}
+        self.file_path = file_path
+        for key in joint_keys:
+            self.pd_gain[key] = []
+
+    def leg_keys(self, FR, FL, RR, RL):
+        self.FR_keys = FR
+        self.FL_keys = FL
+        self.RR_keys = RR
+        self.RL_keys = RL
+
+    def add(self,iteration,pd,pd_total):
+        self.iteration.append(iteration)
+        for index, key in enumerate(self.pd_gain.keys()):
+            self.pd_gain[key].append(pd[index])
+        self.pd_total.append(pd_total)
+
+    def draw(self):
+        plt.ion()
+        plt.figure(1,figsize=(12,12))
+        plt.clf()
+        plt.title('torque graph')
+        ax1 = plt.subplot(5,1,1)
+        ax1.set_title("total")
+        ax1.plot(self.iteration,self.pd_total,c="r")
+        ax2 = plt.subplot(5,1,2)
+        ax2.set_title("FR")
+        for key in self.FR_keys:
+            ax2.plot(self.iteration,self.pd_gain[key],label=str(key))
+        ax2.legend(loc=2)
+        ax3 = plt.subplot(5,1,3)
+        ax3.set_title("FL")
+        for key in self.FL_keys:
+            ax3.plot(self.iteration,self.pd_gain[key],label=str(key))
+        ax3.legend(loc=2)
+        ax4 = plt.subplot(5,1,4)
+        ax4.set_title("RR")
+        for key in self.RR_keys:
+            ax4.plot(self.iteration,self.pd_gain[key],label=str(key))
+        ax4.legend(loc=2)
+        ax5 = plt.subplot(5,1,5)
+        ax5.set_title("RL")
+        for key in self.RL_keys:
+            ax5.plot(self.iteration,self.pd_gain[key],label=str(key))
+        ax5.legend(loc=2)
+        plt.show()
+        plt.pause(4.0)
+        # file_path = os.path.dirname(os.getcwd())+"/result/"
+        if not os.path.isdir(self.file_path):
+            os.mkdir(self.file_path)
+        plt.savefig(self.file_path+"/torque_"+time_checker.str_datetime() +".png")
+
+
+def TensorboardLauncher_local(directory_path):
+    from tensorboard import program
+    import webbrowser
+    # learning visualizer
+    tb = program.TensorBoard()
+    tb.configure(argv=[None, '--logdir', directory_path, '--host', '0.0.0.0'])
+    url = tb.launch()
+    print("[RAISIM_GYM] Tensorboard session created: "+url)
+    webbrowser.open_new(url)
+
+
+# configuration
+current_dir = os.path.dirname(os.path.realpath(__file__))
+rscdir = current_dir+ "/env/rsc"
+parser = argparse.ArgumentParser()
+parser.add_argument('--cfg', type=str, default=os.path.abspath(rscdir + "/default_cfg.yaml"),
+                    help='configuration file')
+parser.add_argument('-m', '--mode', help='set mode either train or test', type=str, default='train')
+parser.add_argument('-w', '--weight', help='trained weight path', type=str, default='')
+args = parser.parse_args()
+mode = args.mode
+
+cfg_abs_path = parser.parse_args().cfg
+cfg = YAML().load(open(cfg_abs_path, 'r'))
+
+# save the configuration and other files
+rsg_root = os.path.dirname(os.path.abspath(__file__))+ '/../Alien_Gesture'
+log_dir = rsg_root + '/data'
+# create environment from the configuration file
+if mode == "test":
+    cfg['environment']['num_envs'] = 1
+
+if mode == "ref":
+    cfg['environment']['num_envs'] = 1
+
+if mode == "gen":
+    cfg['environment']['num_envs'] = 1
+
+env = Environment(RaisimGymEnv(current_dir+"/env/robots", dump(cfg['environment'], Dumper=RoundTripDumper)))
+# Get algorithm
+if mode == 'train':
+    saver = ConfigurationSaver(log_dir=log_dir+'/Simple',
+                               save_items=[rsg_root+'/env/AlienGo/Environment.hpp', cfg_abs_path])
+    model = PPO2(
+        tensorboard_log=saver.data_dir,
+        policy=MlpPolicy,
+        policy_kwargs=dict(net_arch=[dict(pi=[128, 128], vf=[128, 128])], act_fun=tf.nn.leaky_relu),
+        # policy_kwargs=dict(net_arch=[dict(pi=[128, 128], vf=[128, 128])]),
+        env=env,
+        gamma=0.95,
+        n_steps=math.floor(cfg['environment']['max_time'] / cfg['environment']['control_dt']),
+        ent_coef=0.0,
+        learning_rate=5e-5,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        lam=0.95,
+        nminibatches=128,
+        noptepochs=16,
+        cliprange=0.2,
+        verbose=1,
+    )
+    # tensorboard
+    # Make sure that your chrome browser is already on.
+    TensorboardLauncher_local(saver.data_dir + '/PPO2_1')
+
+    # PPO run
+    model.learn(total_timesteps=1200000000, eval_every_n=cfg['environment']['eval_every_n'], log_dir=saver.data_dir, record_video=False)
+
+    # Need this line if you want to keep tensorflow alive after training
+    input("Press Enter to exit... Tensorboard will be closed after exit\n")
+
+elif mode == 'gen':
+    obs = env.reset()
+
+elif mode == 'ref':
+    obs = env.reset()
+    running_reward = 0.0
+    ep_len = 0
+    for i in range(1000):
+        env.wrapper.showWindow()
+        # time.sleep(0.16)
+        reward, done = env.stepRef()
+        running_reward += reward[0]
+        ep_len += 1
+        if done[0]:
+            print("Episode Reward: {:.2f}".format(running_reward))
+            print("Episode Length", ep_len)
+            running_reward = 0.0
+            ep_len = 0
+            break
+
+elif mode == 'retrain':
+    weight_path = args.weight
+    if weight_path == "":
+        print("Can't find trained weight, please provide a trained weight with --weight switch\n")
+    else:
+        print("Loaded weight from {}\n".format(weight_path))
+
+    ## Add start weight file to saver
+    saver = ConfigurationSaver(log_dir=log_dir+'/Simple',save_items=[rsg_root+'/env/AlienGo/Environment.hpp', cfg_abs_path])
+
+    model = PPO2.load(
+        weight_path,
+        tensorboard_log=saver.data_dir,
+        policy=MlpPolicy,
+        policy_kwargs=dict(net_arch=[dict(pi=[128, 128], vf=[128, 128])], act_fun=tf.nn.leaky_relu),
+        env=env,
+        gamma=0.95,
+        n_steps=math.floor(cfg['environment']['max_time'] / cfg['environment']['control_dt']),
+        ent_coef=0.0,
+        learning_rate=5e-5,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        lam=0.95,
+        nminibatches=128,
+        noptepochs=16,
+        cliprange=0.2,
+        verbose=1,
+    )
+
+    model.set_env(env)
+    model.set_update(1950)
+
+    # tensorboard
+    # Make sure that your chrome browser is already on.
+    TensorboardLauncher_local(saver.data_dir + '/PPO2_1')
+
+    # PPO run
+    model.learn(total_timesteps=600000000, eval_every_n=cfg['environment']['eval_every_n'], log_dir=saver.data_dir, record_video=False)
+
+    # Need this line if you want to keep tensorflow alive after training
+    input("Press Enter to exit... Tensorboard will be closed after exit\n")
+
+else:
+    weight_path = args.weight
+    if weight_path == "":
+        print("Can't find trained weight, please provide a trained weight with --weight switch\n")
+    else:
+        print("Loaded weight from {}\n".format(weight_path))
+        model = PPO2.load(weight_path)
+    obs = env.reset()
+    running_reward = 0.0
+    ep_len = 0
+    env.start_recording_video("Test.mp4")
+    for i in range(100000):
+        env.wrapper.showWindow()
+        # time.sleep(0.05)
+        action, _ = model.predict(obs)
+        obs, reward, done, infos = env.stepTest(action)
+        torque = env.getTorque()
+        running_reward += reward[0]
+        total_torque = np.linalg.norm(torque)
+        ep_len += 1
+        if done[0]:
+            env.stop_recording_video()
+            print("Episode Reward: {:.2f}".format(running_reward))
+            print("Episode Length", ep_len)
+            running_reward = 0.0
+            ep_len = 0
+            break

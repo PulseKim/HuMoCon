@@ -1,0 +1,3 @@
+/home/sonic/Project/Alien_Gesture/KinectRaisimtest/build_temp/CMakeFiles/rebuild_cache.dir
+/home/sonic/Project/Alien_Gesture/KinectRaisimtest/build_temp/CMakeFiles/edit_cache.dir
+/home/sonic/Project/Alien_Gesture/KinectRaisimtest/build_temp/CMakeFiles/alien.dir
